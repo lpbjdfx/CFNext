@@ -1,0 +1,79 @@
+name: Sync Upstream and Prepare Pages
+
+on:
+  schedule:
+    - cron: '0 8 * * 1'   # 每周一 UTC 08:00
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Backup workflow files
+        run: |
+          mkdir -p /tmp/workflow-backup
+          cp -r .github /tmp/workflow-backup/ || true
+          cp _worker.js /tmp/workflow-backup/ || true
+
+      - name: Sync with upstream
+        run: |
+          git remote add upstream https://github.com/PAICNI/CFNext.git || true
+          git fetch upstream
+          git checkout main
+          git reset --hard upstream/main
+
+      - name: Restore workflow and extract Pages version
+        run: |
+          mkdir -p .github/workflows
+          cp -r /tmp/workflow-backup/.github/* .github/ || true
+
+          # 优先用新的小说混淆 Pages 版，找不到再尝试旧文件名
+          ZIP=""
+          if [ -f "CFNext-小说混淆Pages版.zip" ]; then
+            ZIP="CFNext-小说混淆Pages版.zip"
+          elif [ -f "CFNext-混淆Pages版.zip" ]; then
+            ZIP="CFNext-混淆Pages版.zip"
+          else
+            echo "错误：找不到 Pages 版 zip 文件"
+            ls -la *.zip || true
+            exit 1
+          fi
+
+          echo "使用: $ZIP"
+          unzip -o "$ZIP" -d temp_pages
+
+          if [ -f temp_pages/_worker.js ]; then
+            cp temp_pages/_worker.js ./_worker.js
+          else
+            find temp_pages -name "_worker.js" -exec cp {} ./_worker.js \;
+          fi
+
+          if [ ! -f _worker.js ]; then
+            echo "错误：解压后未找到 _worker.js"
+            find temp_pages -type f | head -50
+            exit 1
+          fi
+
+          rm -rf temp_pages
+          ls -la _worker.js
+
+      - name: Commit and push
+        run: |
+          git add .github _worker.js
+          git status
+          git commit -m "chore: sync upstream + keep workflow + update _worker.js" || echo "No changes"
+          git push origin main --force
